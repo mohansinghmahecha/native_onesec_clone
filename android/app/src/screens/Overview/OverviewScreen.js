@@ -1,16 +1,63 @@
-// D:\CEO\IntentionalSpace\src\screens\Overview\OverviewScreen.js
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, StatusBar, Platform } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, StatusBar, Platform, ActivityIndicator } from 'react-native';
 import { colors } from '../../constants/colors';
+import { loadData, STORAGE_KEYS } from '../../utils/storage';
 
 export default function OverviewScreen() {
-  // Mock data - will be replaced with real data later
-  const stats = {
-    timeSaved: 127,
-    attemptsPrevented: 43,
-    currentStreak: 5,
-    longestStreak: 12,
+  const [stats, setStats] = useState({
+    timeSaved: 0,
+    attemptsPrevented: 0,
+    currentStreak: 0,
+    longestStreak: 0,
+    todayAttempts: 0,
+    totalBlocks: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const [recentActivity, setRecentActivity] = useState([]);
+
+  useEffect(() => {
+    loadRealData();
+    const interval = setInterval(loadRealData, 5000); // Refresh every 5 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadRealData = async () => {
+    try {
+      // Load analytics from storage
+      const analytics = await loadData(STORAGE_KEYS.ANALYTICS_DATA);
+      if (analytics) {
+        setStats({
+          timeSaved: analytics.totalTimeSaved || 0,
+          attemptsPrevented: analytics.totalAttempts || 0,
+          currentStreak: analytics.currentStreak || 0,
+          longestStreak: analytics.longestStreak || 0,
+          todayAttempts: analytics.todayAttempts || 0,
+          totalBlocks: analytics.totalBlocks || 0,
+        });
+      }
+      
+      // Load recent activity
+      const activity = await loadData(STORAGE_KEYS.RECENT_ACTIVITY);
+      if (activity && Array.isArray(activity)) {
+        setRecentActivity(activity.slice(0, 5)); // Show last 5 activities
+      }
+    } catch (error) {
+      console.error('Error loading stats:', error);
+    } finally {
+      setLoading(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Loading your stats...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -20,7 +67,6 @@ export default function OverviewScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* Header */}
         <View style={styles.header}>
           <Text style={styles.headerTitle}>IntentionalSpace</Text>
           <Text style={styles.headerSubtitle}>Your digital wellness journey</Text>
@@ -32,7 +78,7 @@ export default function OverviewScreen() {
           <Text style={styles.mainCardValue}>{stats.timeSaved} min</Text>
           <View style={styles.mainCardDivider} />
           <Text style={styles.mainCardSubtext}>
-            That's {Math.floor(stats.timeSaved / 5)} mindful moments
+            {stats.timeSaved > 0 ? `That's ${Math.floor(stats.timeSaved / 5)} mindful moments` : 'Start by blocking apps'}
           </Text>
         </View>
 
@@ -52,27 +98,38 @@ export default function OverviewScreen() {
           </View>
         </View>
 
-        {/* Recent Activity */}
+        {/* Today's Activity */}
         <View style={styles.recentSection}>
-          <Text style={styles.sectionTitle}>Recent Activity</Text>
-          <View style={styles.activityItem}>
-            <View style={styles.activityDot} />
-            <Text style={styles.activityText}>Saved 5 min from Instagram</Text>
-            <Text style={styles.activityTime}>2 min ago</Text>
-          </View>
-          <View style={styles.activityItem}>
-            <View style={styles.activityDot} />
-            <Text style={styles.activityText}>Completed breathing exercise</Text>
-            <Text style={styles.activityTime}>1 hour ago</Text>
-          </View>
-          <View style={styles.activityItem}>
-            <View style={styles.activityDot} />
-            <Text style={styles.activityText}>Blocked YouTube opening</Text>
-            <Text style={styles.activityTime}>3 hours ago</Text>
-          </View>
+          <Text style={styles.sectionTitle}>Today's Activity</Text>
+          {stats.todayAttempts === 0 ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyStateText}>No attempts yet today</Text>
+              <Text style={styles.emptyStateSubtext}>Stay mindful! 🌱</Text>
+            </View>
+          ) : (
+            <View style={styles.activityItem}>
+              <View style={styles.activityDot} />
+              <Text style={styles.activityText}>
+                {stats.todayAttempts} intervention{stats.todayAttempts !== 1 ? 's' : ''} triggered
+              </Text>
+            </View>
+          )}
         </View>
+
+        {/* Recent Activity */}
+        {recentActivity.length > 0 && (
+          <View style={styles.recentSection}>
+            <Text style={styles.sectionTitle}>Recent Activity</Text>
+            {recentActivity.map((activity, index) => (
+              <View key={index} style={styles.activityItem}>
+                <View style={styles.activityDot} />
+                <Text style={styles.activityText}>{activity.message}</Text>
+                <Text style={styles.activityTime}>{activity.time}</Text>
+              </View>
+            ))}
+          </View>
+        )}
         
-        {/* Extra padding for bottom tab bar */}
         <View style={styles.bottomPadding} />
       </ScrollView>
     </SafeAreaView>
@@ -90,6 +147,16 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     paddingBottom: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.background,
+  },
+  loadingText: {
+    color: colors.textSecondary,
+    marginTop: 12,
   },
   header: {
     paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight + 10 : 20,
@@ -198,7 +265,20 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 12,
   },
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 32,
+  },
+  emptyStateText: {
+    color: colors.textSecondary,
+    fontSize: 16,
+    marginBottom: 8,
+  },
+  emptyStateSubtext: {
+    color: colors.textTertiary,
+    fontSize: 14,
+  },
   bottomPadding: {
-    height: 80, // Extra space for bottom tab bar
+    height: 80,
   },
 });
