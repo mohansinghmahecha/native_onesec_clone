@@ -12,6 +12,7 @@ buildscript {
         mavenCentral()
     }
     dependencies {
+        // classpath("com.android.tools.build:gradle:8.2.2")  // Updated for RN 0.85.3
         classpath("com.android.tools.build:gradle")
         classpath("com.facebook.react:react-native-gradle-plugin")
         classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")

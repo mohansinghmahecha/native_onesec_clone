@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">IntentionalSpace</string>
+    <string name="accessibility_service_description">IntentionalSpace helps you reduce addictive app usage by detecting when you open social media apps and showing mindful intervention screens before allowing access.</string>
 </resources>
