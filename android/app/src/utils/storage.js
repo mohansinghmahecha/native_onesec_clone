@@ -1,15 +1,16 @@
 // D:\CEO\IntentionalSpace\src\utils\storage.js
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { showSuccess, showError } from './toast';
 
 // Save data
 export const saveData = async (key, value) => {
   try {
     const jsonValue = JSON.stringify(value);
     await AsyncStorage.setItem(key, jsonValue);
-    console.log('✅ Data saved:', key);
+    showSuccess('Saved', `${key} saved successfully`);
     return true;
   } catch (error) {
-    console.error('❌ Error saving data:', error);
+    showError('Save Failed', error.message);
     return false;
   }
 };
@@ -19,13 +20,11 @@ export const loadData = async (key) => {
   try {
     const jsonValue = await AsyncStorage.getItem(key);
     if (jsonValue != null) {
-      console.log('✅ Data loaded:', key);
       return JSON.parse(jsonValue);
     }
-    console.log('📭 No data found for key:', key);
     return null;
   } catch (error) {
-    console.error('❌ Error loading data:', error);
+    showError('Load Failed', error.message);
     return null;
   }
 };
@@ -34,34 +33,10 @@ export const loadData = async (key) => {
 export const removeData = async (key) => {
   try {
     await AsyncStorage.removeItem(key);
-    console.log('🗑️ Data removed:', key);
+    showSuccess('Removed', `${key} removed`);
     return true;
   } catch (error) {
-    console.error('❌ Error removing data:', error);
-    return false;
-  }
-};
-
-// Get all keys
-export const getAllKeys = async () => {
-  try {
-    const keys = await AsyncStorage.getAllKeys();
-    console.log('🔑 All keys:', keys);
-    return keys;
-  } catch (error) {
-    console.error('❌ Error getting keys:', error);
-    return [];
-  }
-};
-
-// Clear all data
-export const clearAllData = async () => {
-  try {
-    await AsyncStorage.clear();
-    console.log('🧹 All data cleared');
-    return true;
-  } catch (error) {
-    console.error('❌ Error clearing data:', error);
+    showError('Remove Failed', error.message);
     return false;
   }
 };
@@ -70,7 +45,6 @@ export const clearAllData = async () => {
 export const STORAGE_KEYS = {
   BLOCKED_APPS: '@blocked_apps',
   USER_SETTINGS: '@user_settings',
-  ANALYTICS_DATA: '@analytics_data',
-  INTERVENTION_COUNT: '@intervention_count',
-  STREAK_DATA: '@streak_data',
+  UNLOCKED_APPS: '@unlocked_apps', // For timer service
+  ACTIVE_TIMERS: '@active_timers',
 };

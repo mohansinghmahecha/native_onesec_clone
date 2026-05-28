@@ -1,8 +1,13 @@
 // D:\CEO\IntentionalSpace\src\screens\Block\BlockScreen.js
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Switch, TouchableOpacity, Alert, StatusBar, Platform } from 'react-native';
+import { 
+  View, Text, StyleSheet, ScrollView, SafeAreaView, 
+  Switch, TouchableOpacity, Alert, StatusBar, Platform 
+} from 'react-native';
 import { colors } from '../../constants/colors';
 import { saveData, loadData, STORAGE_KEYS } from '../../utils/storage';
+import { showSuccess, showError, showInfo } from '../../utils/toast';
+import SyncService from '../../services/accessibility/SyncService';
 
 export default function BlockScreen() {
   const [strictMode, setStrictMode] = useState(false);
@@ -20,17 +25,20 @@ export default function BlockScreen() {
 
   const loadSavedData = async () => {
     try {
+      // Load blocked apps
       const savedBlockedApps = await loadData(STORAGE_KEYS.BLOCKED_APPS);
       if (savedBlockedApps) {
         setBlockedApps(savedBlockedApps);
+        showInfo('Loaded', 'Your blocked apps settings loaded');
       }
       
+      // Load strict mode
       const savedSettings = await loadData(STORAGE_KEYS.USER_SETTINGS);
       if (savedSettings && savedSettings.strictMode !== undefined) {
         setStrictMode(savedSettings.strictMode);
       }
     } catch (error) {
-      console.error('Error loading data:', error);
+      showError('Load Error', error.message);
     }
   };
 
@@ -38,6 +46,10 @@ export default function BlockScreen() {
     const newBlockedApps = { ...blockedApps, [app]: !blockedApps[app] };
     setBlockedApps(newBlockedApps);
     await saveData(STORAGE_KEYS.BLOCKED_APPS, newBlockedApps);
+    await SyncService.syncBlockedAppsToNative();
+
+    const status = newBlockedApps[app] ? 'blocked' : 'unblocked';
+    showSuccess(app.toUpperCase(), `App ${status}`);
   };
 
   const toggleStrictMode = async (value) => {
@@ -45,6 +57,7 @@ export default function BlockScreen() {
     const settings = await loadData(STORAGE_KEYS.USER_SETTINGS) || {};
     settings.strictMode = value;
     await saveData(STORAGE_KEYS.USER_SETTINGS, settings);
+    showInfo('Strict Mode', value ? 'Enabled' : 'Disabled');
   };
 
   const applyPreset = async (preset) => {
@@ -59,6 +72,7 @@ export default function BlockScreen() {
           reddit: true,
           facebook: true,
         };
+        showSuccess('Preset Applied', 'Social Media preset activated');
         break;
       case 'video':
         newBlockedApps = {
@@ -68,6 +82,7 @@ export default function BlockScreen() {
           reddit: false,
           facebook: false,
         };
+        showSuccess('Preset Applied', 'Video Apps preset activated');
         break;
       case 'all':
         newBlockedApps = {
@@ -77,6 +92,7 @@ export default function BlockScreen() {
           reddit: true,
           facebook: true,
         };
+        showSuccess('Preset Applied', 'All Apps blocked');
         break;
       default:
         return;
@@ -84,7 +100,19 @@ export default function BlockScreen() {
     
     setBlockedApps(newBlockedApps);
     await saveData(STORAGE_KEYS.BLOCKED_APPS, newBlockedApps);
-    Alert.alert('Preset Applied', `${preset.toUpperCase()} preset has been applied`);
+  };
+
+  const resetToDefault = async () => {
+    const defaultApps = {
+      instagram: true,
+      youtube: true,
+      twitter: false,
+      reddit: false,
+      facebook: false,
+    };
+    setBlockedApps(defaultApps);
+    await saveData(STORAGE_KEYS.BLOCKED_APPS, defaultApps);
+    showSuccess('Reset', 'All settings reset to default');
   };
 
   const appsList = [
@@ -170,18 +198,7 @@ export default function BlockScreen() {
         {/* Reset Button */}
         <TouchableOpacity 
           style={styles.resetButton}
-          onPress={async () => {
-            const defaultApps = {
-              instagram: true,
-              youtube: true,
-              twitter: false,
-              reddit: false,
-              facebook: false,
-            };
-            setBlockedApps(defaultApps);
-            await saveData(STORAGE_KEYS.BLOCKED_APPS, defaultApps);
-            Alert.alert('Reset', 'All settings have been reset to default');
-          }}
+          onPress={resetToDefault}
         >
           <Text style={styles.resetButtonText}>Reset to Default</Text>
         </TouchableOpacity>

@@ -25,6 +25,7 @@ class OverlayService : Service() {
     private lateinit var windowManager: WindowManager
     private var overlayView: View? = null
     private val handler = Handler(Looper.getMainLooper())
+    private var timerRunnable: Runnable? = null
     
     companion object {
         private const val TAG = "IntentionalSpace"
@@ -42,18 +43,19 @@ class OverlayService : Service() {
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val packageName = intent?.getStringExtra("package_name") ?: ""
-        Log.d(TAG, "🔄 Showing intervention for: $packageName")
-        showInterventionUI(packageName)
+        val appName = intent?.getStringExtra("app_name") ?: "App"
+        
+        Log.d(TAG, "🔄 Showing intervention for: $appName")
+        showInterventionUI(packageName, appName)
+        
         return START_NOT_STICKY
     }
     
-    private fun showInterventionUI(packageName: String) {
+    private fun showInterventionUI(packageName: String, appName: String) {
         try {
-            // Inflate the overlay layout
             val inflater = getSystemService(LAYOUT_INFLATER_SERVICE) as LayoutInflater
             overlayView = inflater.inflate(R.layout.overlay_intervention, null)
             
-            // Configure window parameters
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -68,29 +70,32 @@ class OverlayService : Service() {
             
             params.gravity = Gravity.TOP or Gravity.START
             
-            // Get UI elements
+            // Find views by ID
+            val appNameText = overlayView?.findViewById<TextView>(R.id.app_name_text)
             val breathInstruction = overlayView?.findViewById<TextView>(R.id.breath_instruction)
             val timerText = overlayView?.findViewById<TextView>(R.id.timer_text)
             val oneMinButton = overlayView?.findViewById<Button>(R.id.one_min_button)
             val fiveMinButton = overlayView?.findViewById<Button>(R.id.five_min_button)
             val tenMinButton = overlayView?.findViewById<Button>(R.id.ten_min_button)
             
-            breathInstruction?.text = "Take a deep breath before continuing..."
+            // Set app name
+            appNameText?.text = appName
             
-            // Breathing animation countdown
+            // Breathing countdown
             var countdown = 5
             timerText?.text = countdown.toString()
+            breathInstruction?.text = "Take a deep breath before continuing..."
             
-            val timerRunnable = object : Runnable {
+            timerRunnable = object : Runnable {
                 override fun run() {
                     countdown--
                     if (countdown >= 0) {
-                        timerText?.text = if (countdown > 0) countdown.toString() else "Breathe"
+                        timerText?.text = if (countdown > 0) countdown.toString() else "✨"
                         handler.postDelayed(this, 1000)
                     } else {
                         timerText?.text = "Ready"
                         breathInstruction?.text = "How much time do you need?"
-                        // Enable buttons after breathing exercise
+                        // Enable buttons after breathing
                         oneMinButton?.isEnabled = true
                         fiveMinButton?.isEnabled = true
                         tenMinButton?.isEnabled = true
@@ -100,25 +105,25 @@ class OverlayService : Service() {
                     }
                 }
             }
-            handler.post(timerRunnable)
+            handler.post(timerRunnable!!)
             
             // Button click handlers
             oneMinButton?.setOnClickListener {
-                unlockApp(packageName, 1)
+                unlockApp(packageName, appName, 1)
                 removeOverlay()
             }
             
             fiveMinButton?.setOnClickListener {
-                unlockApp(packageName, 5)
+                unlockApp(packageName, appName, 5)
                 removeOverlay()
             }
             
             tenMinButton?.setOnClickListener {
-                unlockApp(packageName, 10)
+                unlockApp(packageName, appName, 10)
                 removeOverlay()
             }
             
-            // Disable buttons initially
+            // Initially disable buttons
             oneMinButton?.isEnabled = false
             fiveMinButton?.isEnabled = false
             tenMinButton?.isEnabled = false
@@ -130,17 +135,45 @@ class OverlayService : Service() {
             
         } catch (e: Exception) {
             Log.e(TAG, "Error showing overlay: ${e.message}")
+            stopSelf()
         }
     }
     
-    private fun unlockApp(packageName: String, minutes: Int) {
-        Log.d(TAG, "🔓 Unlocking $packageName for $minutes minutes")
-        // TODO: Send event to React Native
-        // TODO: Start timer for unlock period
+    private fun unlockApp(packageName: String, appName: String, minutes: Int) {
+        Log.d(TAG, "🔓 Unlocking $appName for $minutes minutes")
+        
+        // Send broadcast to React Native
+        val intent = Intent("APP_UNLOCKED")
+        intent.putExtra("packageName", packageName)
+        intent.putExtra("appName", appName)
+        intent.putExtra("minutes", minutes)
+        sendBroadcast(intent)
+        
+        // Show notification
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "unlock_channel",
+                "App Unlock",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
+            notificationManager.createNotificationChannel(channel)
+        }
+        
+        val notification = NotificationCompat.Builder(this, "unlock_channel")
+            .setContentTitle("App Unlocked")
+            .setContentText("$appName is unlocked for $minutes minutes")
+            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setAutoCancel(true)
+            .build()
+        
+        notificationManager.notify(packageName.hashCode(), notification)
     }
     
     private fun removeOverlay() {
         try {
+            timerRunnable?.let { handler.removeCallbacks(it) }
             overlayView?.let {
                 windowManager.removeView(it)
                 overlayView = null
@@ -158,7 +191,7 @@ class OverlayService : Service() {
                 "IntentionalSpace",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Shows intervention screens when blocked apps are opened"
+                description = "Shows intervention screens"
                 setShowBadge(false)
             }
             val manager = getSystemService(NotificationManager::class.java)

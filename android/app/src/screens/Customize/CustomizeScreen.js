@@ -1,18 +1,26 @@
-// D:\CEO\IntentionalSpace\src\screens\Customize\CustomizeScreen.js
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity, StatusBar, Platform, Linking } from 'react-native';
 import { colors } from '../../constants/colors';
 
 export default function CustomizeScreen() {
-  const permissions = [
-    { name: 'Accessibility Service', description: 'Detect when apps are opened', status: 'not_granted' },
-    { name: 'Usage Access', description: 'Track app usage statistics', status: 'not_granted' },
-    { name: 'Overlay Permission', description: 'Show intervention screens', status: 'not_granted' },
-  ];
+  
+  const openAccessibilitySettings = () => {
+    Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS');
+  };
+  
+  const openOverlaySettings = () => {
+    Linking.sendIntent('android.settings.action.MANAGE_OVERLAY_PERMISSION');
+  };
+  
+  const openUsageSettings = () => {
+    Linking.sendIntent('android.settings.USAGE_ACCESS_SETTINGS');
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
+      <StatusBar barStyle="light-content" backgroundColor={colors.background} />
       <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+        
         <View style={styles.header}>
           <Text style={styles.headerTitle}>Customize</Text>
           <Text style={styles.headerSubtitle}>Configure your experience</Text>
@@ -20,19 +28,32 @@ export default function CustomizeScreen() {
 
         {/* Permissions Section */}
         <Text style={styles.sectionTitle}>Required Permissions</Text>
-        {permissions.map((perm, index) => (
-          <View key={index} style={styles.permissionCard}>
-            <View style={styles.permissionText}>
-              <Text style={styles.permissionName}>{perm.name}</Text>
-              <Text style={styles.permissionDescription}>{perm.description}</Text>
-            </View>
-            <TouchableOpacity style={styles.permissionButton}>
-              <Text style={styles.permissionButtonText}>Enable</Text>
-            </TouchableOpacity>
+        
+        <TouchableOpacity style={styles.permissionCard} onPress={openAccessibilitySettings}>
+          <View style={styles.permissionText}>
+            <Text style={styles.permissionName}>Accessibility Service</Text>
+            <Text style={styles.permissionDescription}>Detect when apps are opened</Text>
           </View>
-        ))}
+          <Text style={styles.arrowButton}>→</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity style={styles.permissionCard} onPress={openUsageSettings}>
+          <View style={styles.permissionText}>
+            <Text style={styles.permissionName}>Usage Access</Text>
+            <Text style={styles.permissionDescription}>Track app usage statistics</Text>
+          </View>
+          <Text style={styles.arrowButton}>→</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity style={styles.permissionCard} onPress={openOverlaySettings}>
+          <View style={styles.permissionText}>
+            <Text style={styles.permissionName}>Overlay Permission</Text>
+            <Text style={styles.permissionDescription}>Show intervention screens</Text>
+          </View>
+          <Text style={styles.arrowButton}>→</Text>
+        </TouchableOpacity>
 
-        {/* Settings Section */}
+        {/* App Settings */}
         <Text style={styles.sectionTitle}>App Settings</Text>
         
         <View style={styles.settingCard}>
@@ -41,25 +62,15 @@ export default function CustomizeScreen() {
         </View>
         
         <View style={styles.settingCard}>
-          <Text style={styles.settingName}>Breathing Exercise Duration</Text>
-          <Text style={styles.settingValue}>10 seconds</Text>
-        </View>
-        
-        <View style={styles.settingCard}>
-          <Text style={styles.settingName}>Haptic Feedback</Text>
-          <Text style={styles.settingValue}>Enabled</Text>
+          <Text style={styles.settingName}>Breathing Duration</Text>
+          <Text style={styles.settingValue}>5 seconds</Text>
         </View>
 
-        {/* Tutorial Section */}
-        <Text style={styles.sectionTitle}>Help & Tutorials</Text>
+        {/* Tutorial */}
+        <Text style={styles.sectionTitle}>Need Help?</Text>
         <TouchableOpacity style={styles.helpCard}>
-          <Text style={styles.helpTitle}>How to enable permissions</Text>
-          <Text style={styles.helpDescription}>Step-by-step guide</Text>
-        </TouchableOpacity>
-        
-        <TouchableOpacity style={styles.helpCard}>
-          <Text style={styles.helpTitle}>Understanding interventions</Text>
-          <Text style={styles.helpDescription}>Learn how it works</Text>
+          <Text style={styles.helpTitle}>📖 How to enable permissions</Text>
+          <Text style={styles.helpDescription}>Step-by-step guide to enable all permissions</Text>
         </TouchableOpacity>
 
         <View style={styles.bottomPadding} />
@@ -78,7 +89,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   header: {
-    paddingTop: 20,
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight + 10 : 20,
     paddingHorizontal: 24,
     paddingBottom: 20,
   },
@@ -125,16 +136,10 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
   },
-  permissionButton: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  permissionButtonText: {
-    color: colors.textPrimary,
-    fontSize: 14,
-    fontWeight: '600',
+  arrowButton: {
+    color: colors.primary,
+    fontSize: 20,
+    fontWeight: 'bold',
   },
   settingCard: {
     flexDirection: 'row',
@@ -177,6 +182,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   bottomPadding: {
-    height: 100,
+    height: 80,
   },
 });
