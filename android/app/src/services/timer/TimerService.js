@@ -2,6 +2,7 @@
 import { showSuccess, showInfo, showError } from '../../utils/toast';
 import { saveData, loadData, STORAGE_KEYS } from '../../utils/storage';
 import NotificationService from '../notifications/NotificationService';
+import { clearNativeUnlock } from '../../utils/nativeSync';
 
 class TimerService {
   constructor() {
@@ -60,6 +61,7 @@ class TimerService {
     this.unlockedApps = this.unlockedApps.filter(app => {
       if (app.expiresAt <= now) {
         console.log(`🔒 App locked: ${app.packageName}`);
+        clearNativeUnlock(app.packageName).catch(() => {});
         NotificationService.showAppLockedNotification(app.appName);
         hasChanges = true;
         return false;
@@ -69,6 +71,28 @@ class TimerService {
 
     if (hasChanges) {
       this.saveTimers();
+    }
+  }
+
+  /** Sync JS timer state when native already granted unlock (overlay path). */
+  syncFromNativeUnlock(packageName, appName, minutes) {
+    try {
+      const expiresAt = Date.now() + minutes * 60 * 1000;
+      this.lockApp(packageName, false);
+      this.timers = this.timers.filter(t => t.packageName !== packageName);
+      this.timers.push({
+        id: Date.now().toString(),
+        packageName,
+        appName,
+        minutes,
+        expiresAt,
+        startTime: Date.now(),
+      });
+      this.unlockedApps = this.unlockedApps.filter(a => a.packageName !== packageName);
+      this.unlockedApps.push({ packageName, appName, expiresAt, minutes });
+      this.saveTimers();
+    } catch (error) {
+      console.error('syncFromNativeUnlock failed:', error);
     }
   }
 

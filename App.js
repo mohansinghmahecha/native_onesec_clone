@@ -1,23 +1,95 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Provider } from 'react-redux';
-import { View, Modal, Text, TouchableOpacity, StyleSheet, Linking, Alert } from 'react-native';
+import {
+  View,
+  Modal,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Linking,
+  Alert,
+  AppState,
+  NativeModules,
+  DeviceEventEmitter,
+} from 'react-native';
 import Toast from 'react-native-toast-message';
 import { store } from './android/app/src/store/store';
-import AppNavigator from './android/app/src/navigation/AppNavigator';
+import RootNavigator from './android/app/src/navigation/RootNavigator';
+import BlockedAppInterventionModal from './android/app/src/screens/Intervention/BlockedAppInterventionModal';
 import TimerService from './android/app/src/services/timer/TimerService';
-import InterventionHandler from './android/app/src/screens/Intervention/InterventionHandler';
+import {
+  grantNativeUnlock,
+  syncAllToNative,
+  clearPendingInterventionNative,
+  launchTargetAppNative,
+  finishInterventionNative,
+  exitTargetAppNative,
+} from './android/app/src/utils/nativeSync';
+import { getAppByPackage } from './android/app/src/utils/appConfig';
 import './android/app/src/services/accessibility/AppUnlockReceiver';
+
+const { PendingAppModule } = NativeModules;
 
 function App() {
   const [showPermissionModal, setShowPermissionModal] = useState(false);
   const [hasCheckedPermissions, setHasCheckedPermissions] = useState(false);
+  const [intervention, setIntervention] = useState({
+    visible: false,
+    packageName: null,
+    appName: null,
+  });
+
+  const openIntervention = useCallback((packageName, appName) => {
+    if (!packageName) return;
+    const app = getAppByPackage(packageName);
+    setIntervention({
+      visible: true,
+      packageName,
+      appName: appName || app?.name || 'App',
+    });
+  }, []);
+
+  const checkPendingIntervention = useCallback(async () => {
+    try {
+      if (PendingAppModule?.getPendingApp) {
+        const pending = await PendingAppModule.getPendingApp();
+        if (pending?.packageName && pending?.showIntervention !== false) {
+          openIntervention(pending.packageName, pending.appName);
+        }
+      }
+    } catch (e) {
+      console.warn('PendingAppModule check failed:', e);
+    }
+  }, [openIntervention]);
 
   useEffect(() => {
     checkPermissionsOnFirstLaunch();
+    syncAllToNative();
   }, []);
 
+  useEffect(() => {
+    const subRequired = DeviceEventEmitter.addListener(
+      'INTERVENTION_REQUIRED',
+      (event) => {
+        openIntervention(event?.packageName, event?.appName);
+      },
+    );
+
+    const subAppState = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        checkPendingIntervention();
+      }
+    });
+
+    checkPendingIntervention();
+
+    return () => {
+      subRequired.remove();
+      subAppState.remove();
+    };
+  }, [openIntervention, checkPendingIntervention]);
+
   const checkPermissionsOnFirstLaunch = async () => {
-    // Check if first launch
     const isFirstLaunch = await checkFirstLaunch();
     if (isFirstLaunch) {
       setShowPermissionModal(true);
@@ -39,48 +111,72 @@ function App() {
     }
   };
 
-  const openAccessibilitySettings = () => {
-    Linking.sendIntent('android.settings.ACCESSIBILITY_SETTINGS');
-  };
-
-  const openOverlaySettings = () => {
-    Linking.sendIntent('android.settings.action.MANAGE_OVERLAY_PERMISSION');
-  };
-
-  const openUsageSettings = () => {
-    Linking.sendIntent('android.settings.USAGE_ACCESS_SETTINGS');
-  };
-
   const checkAllPermissions = async () => {
     setShowPermissionModal(false);
-    // Show guide after modal closes
     setTimeout(() => {
       Alert.alert(
         'Enable Permissions',
         'Please enable these permissions for the app to work:\n\n1️⃣ Overlay Permission\n2️⃣ Accessibility Service\n3️⃣ Usage Access\n\nGo to Settings → Apps → IntentionalSpace to enable them.',
         [
-          { text: 'Open Settings', onPress: () => Linking.sendIntent('android.settings.APPLICATION_DETAILS_SETTINGS') },
-          { text: 'Later', style: 'cancel' }
-        ]
+          {
+            text: 'Open Settings',
+            onPress: () =>
+              Linking.sendIntent('android.settings.APPLICATION_DETAILS_SETTINGS'),
+          },
+          { text: 'Later', style: 'cancel' },
+        ],
       );
     }, 500);
   };
 
-  if (!hasCheckedPermissions) {
-    return (
-      <View style={styles.loadingContainer}>
-        <Text style={styles.loadingText}>Loading...</Text>
-      </View>
-    );
-  }
+  const closeIntervention = useCallback(async () => {
+    setIntervention({ visible: false, packageName: null, appName: null });
+    await clearPendingInterventionNative();
+  }, []);
+
+  const exitIntervention = useCallback(async () => {
+    const packageName = intervention.packageName;
+    setIntervention({ visible: false, packageName: null, appName: null });
+    await clearPendingInterventionNative();
+    if (packageName) {
+      await exitTargetAppNative(packageName);
+    }
+  }, [intervention]);
+
+  const handleInterventionComplete = useCallback(
+    async (minutes) => {
+      const { packageName, appName } = intervention;
+      if (!packageName) return;
+
+      await grantNativeUnlock(packageName, minutes);
+      TimerService.unlockApp(packageName, appName, minutes);
+      await clearPendingInterventionNative();
+      setIntervention({ visible: false, packageName: null, appName: null });
+      await launchTargetAppNative(packageName);
+      await finishInterventionNative();
+    },
+    [intervention],
+  );
 
   return (
     <Provider store={store}>
       <View style={{ flex: 1 }}>
-        <AppNavigator />
+        {hasCheckedPermissions ? <RootNavigator /> : (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>Loading...</Text>
+          </View>
+        )}
         <Toast />
-        
-        {/* Permission Request Modal - Shows on First Launch */}
+
+        <BlockedAppInterventionModal
+          visible={intervention.visible}
+          packageName={intervention.packageName}
+          appName={intervention.appName}
+          onClose={closeIntervention}
+          onExit={exitIntervention}
+          onComplete={handleInterventionComplete}
+        />
+
         <Modal
           visible={showPermissionModal}
           transparent={true}
@@ -90,8 +186,10 @@ function App() {
           <View style={styles.modalContainer}>
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>🎯 Welcome to IntentionalSpace</Text>
-              <Text style={styles.modalSubtitle}>Let's set up your digital wellness journey</Text>
-              
+              <Text style={styles.modalSubtitle}>
+                Let's set up your digital wellness journey
+              </Text>
+
               <View style={styles.permissionList}>
                 <View style={styles.permissionItem}>
                   <Text style={styles.permissionIcon}>1️⃣</Text>
@@ -106,11 +204,12 @@ function App() {
                   <Text style={styles.permissionText}>Grant Usage Access</Text>
                 </View>
               </View>
-              
+
               <Text style={styles.modalNote}>
-                These permissions help detect when you open apps and show mindful interventions.
+                These permissions help detect when you open apps and show mindful
+                interventions.
               </Text>
-              
+
               <TouchableOpacity style={styles.modalButton} onPress={checkAllPermissions}>
                 <Text style={styles.modalButtonText}>Let's Go →</Text>
               </TouchableOpacity>

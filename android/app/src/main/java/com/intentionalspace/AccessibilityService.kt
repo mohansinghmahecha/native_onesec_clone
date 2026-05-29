@@ -3,97 +3,148 @@ package com.intentionalspace
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
-import android.content.Intent
-import android.content.SharedPreferences
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 
 class AccessibilityService : AccessibilityService() {
-    
+
     companion object {
         private const val TAG = "IntentionalSpace"
         var isServiceRunning = false
-        
-        val TRIGGER_APPS = mapOf(
-            "com.instagram.android" to "Instagram",
-            "com.google.android.youtube" to "YouTube",
-            "com.twitter.android" to "X/Twitter",
-            "com.reddit.frontpage" to "Reddit",
-            "com.facebook.katana" to "Facebook",
-            "com.snapchat.android" to "Snapchat"
-        )
+
+        @Volatile
+        private var instance: AccessibilityService? = null
+
+        private var lastInterventionPackage: String? = null
+        private var lastInterventionAt: Long = 0L
+        private const val INTERVENTION_DEBOUNCE_MS = 4_000L
+
+        /** Throttle expensive checks — WINDOW_STATE_CHANGED only, but still debounced. */
+        private var lastProbePackage: String? = null
+        private var lastProbeAt: Long = 0L
+        private const val PROBE_INTERVAL_MS = 1_000L
+
+        private const val POST_UNLOCK_GRACE_MS = 5_000L
+        private val unlockCooldownUntilMs = mutableMapOf<String, Long>()
+
+        /** After exit/auto-exit, ignore brief window events during HOME transition. */
+        private const val POST_EXIT_GRACE_MS = 3_000L
+        private val exitCooldownUntilMs = mutableMapOf<String, Long>()
+
+        @Volatile
+        var interventionInFlight: Boolean = false
+
+        fun markUnlockCooldown(packageName: String) {
+            unlockCooldownUntilMs[packageName] =
+                System.currentTimeMillis() + POST_UNLOCK_GRACE_MS
+        }
+
+        fun clearUnlockCooldown(packageName: String) {
+            unlockCooldownUntilMs.remove(packageName)
+        }
+
+        fun markExitCooldown(packageName: String) {
+            exitCooldownUntilMs[packageName] =
+                System.currentTimeMillis() + POST_EXIT_GRACE_MS
+        }
+
+        fun clearExitCooldown(packageName: String) {
+            exitCooldownUntilMs.remove(packageName)
+        }
+
+        fun resetInterventionDebounce(packageName: String) {
+            if (lastInterventionPackage == packageName) {
+                lastInterventionPackage = null
+                lastInterventionAt = 0L
+            }
+        }
+
+        fun clearInterventionInFlight() {
+            interventionInFlight = false
+        }
+
+        private fun isInExitCooldown(packageName: String): Boolean {
+            val until = exitCooldownUntilMs[packageName] ?: return false
+            if (until > System.currentTimeMillis()) return true
+            exitCooldownUntilMs.remove(packageName)
+            return false
+        }
+
+        private fun isInUnlockCooldown(packageName: String): Boolean {
+            val until = unlockCooldownUntilMs[packageName] ?: return false
+            if (until > System.currentTimeMillis()) return true
+            unlockCooldownUntilMs.remove(packageName)
+            return false
+        }
+
+        fun getServiceInstance(): AccessibilityService? = instance
+
+        fun requestReblock(context: Context, packageName: String, appName: String) {
+            InterventionLauncher.showReblockOverlay(context, packageName, appName)
+        }
     }
-    
-    private lateinit var sharedPreferences: SharedPreferences
-    
-    override fun onCreate() {
-        super.onCreate()
-        sharedPreferences = getSharedPreferences("IntentionalSpace", Context.MODE_PRIVATE)
-    }
-    
+
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         isServiceRunning = true
-        Log.d(TAG, "✅ Accessibility Service Connected")
-        
+        Log.d(TAG, "Accessibility service connected")
+
         val info = AccessibilityServiceInfo().apply {
+            // CONTENT_CHANGED caused hundreds of events/sec in YouTube → hang/black loop
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-            notificationTimeout = 100
+            notificationTimeout = 300
         }
         setServiceInfo(info)
     }
-    
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event?.let {
-            if (it.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-                val packageName = it.packageName?.toString() ?: return
-                
-                if (TRIGGER_APPS.containsKey(packageName)) {
-                    val appName = TRIGGER_APPS[packageName] ?: return
-                    
-                    if (isAppBlocked(packageName)) {
-                        Log.d(TAG, "🔴 Blocked app detected: $appName")
-                        showInterventionOverlay(packageName, appName)
-                    } else {
-                        Log.d(TAG, "✅ App not blocked: $appName")
-                    }
-                }
-            }
-        }
+        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        val packageName = event.packageName?.toString() ?: return
+        maybeIntervene(packageName)
     }
-    
-    private fun isAppBlocked(packageName: String): Boolean {
-        val blockedAppsJson = sharedPreferences.getString("blocked_apps", null)
-        if (blockedAppsJson != null) {
-            return blockedAppsJson.contains(packageName) && 
-                   !blockedAppsJson.contains("\"$packageName\":false")
+
+    private fun maybeIntervene(packageName: String) {
+        if (TriggerAppsHelper.resolvePackage(packageName) == null) return
+
+        val now = System.currentTimeMillis()
+        if (packageName == lastProbePackage && now - lastProbeAt < PROBE_INTERVAL_MS) {
+            return
         }
-        return packageName == "com.instagram.android" || 
-               packageName == "com.google.android.youtube"
-    }
-    
-    private fun showInterventionOverlay(packageName: String, appName: String) {
-        try {
-            val intent = Intent(this, OverlayService::class.java).apply {
-                putExtra("package_name", packageName)
-                putExtra("app_name", appName)
-            }
-            startService(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Error starting overlay: ${e.message}")
+        lastProbePackage = packageName
+        lastProbeAt = now
+
+        if (UnlockStateStore.isUnlocked(this, packageName)) return
+        if (isInUnlockCooldown(packageName)) return
+        if (isInExitCooldown(packageName)) return
+        if (interventionInFlight || OverlayService.isOverlayVisible) return
+
+        if (
+            packageName == lastInterventionPackage &&
+            now - lastInterventionAt < INTERVENTION_DEBOUNCE_MS
+        ) {
+            return
         }
+
+        if (!BlockedAppsHelper.shouldIntervene(this, packageName)) return
+
+        val appName = TriggerAppsHelper.getAppName(packageName)
+        Log.d(TAG, "Intervention: $appName")
+        lastInterventionPackage = packageName
+        lastInterventionAt = now
+        interventionInFlight = true
+        InterventionLauncher.launch(this, packageName, appName)
     }
-    
+
     override fun onInterrupt() {
         isServiceRunning = false
-        Log.d(TAG, "⚠️ Accessibility Service Interrupted")
     }
-    
+
     override fun onDestroy() {
         super.onDestroy()
+        if (instance === this) instance = null
         isServiceRunning = false
-        Log.d(TAG, "🛑 Accessibility Service Destroyed")
+        interventionInFlight = false
     }
 }

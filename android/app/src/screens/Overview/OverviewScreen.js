@@ -1,52 +1,62 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, StatusBar, Platform, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  SafeAreaView,
+  StatusBar,
+  Platform,
+  ActivityIndicator,
+} from 'react-native';
 import { colors } from '../../constants/colors';
-import { loadData, STORAGE_KEYS } from '../../utils/storage';
+import { getTodayOverviewStatsNative } from '../../utils/nativeSync';
+
+function formatMinutes(totalMinutes) {
+  if (totalMinutes < 60) {
+    return `${totalMinutes} min`;
+  }
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
 
 export default function OverviewScreen() {
   const [stats, setStats] = useState({
-    timeSaved: 0,
-    attemptsPrevented: 0,
-    currentStreak: 0,
-    longestStreak: 0,
-    todayAttempts: 0,
-    totalBlocks: 0,
+    todayScreenMinutes: 0,
+    timeSavedMinutes: 0,
+    attemptsToday: 0,
+    grantedMinutesToday: 0,
+    blockedAppUsageMinutes: 0,
+    hasUsagePermission: false,
   });
   const [loading, setLoading] = useState(true);
-  const [recentActivity, setRecentActivity] = useState([]);
 
-  useEffect(() => {
-    loadRealData();
-    const interval = setInterval(loadRealData, 5000); // Refresh every 5 seconds
-    return () => clearInterval(interval);
-  }, []);
-
-  const loadRealData = async () => {
+  const loadRealData = useCallback(async () => {
     try {
-      // Load analytics from storage
-      const analytics = await loadData(STORAGE_KEYS.ANALYTICS_DATA);
-      if (analytics) {
+      const native = await getTodayOverviewStatsNative();
+      if (native) {
         setStats({
-          timeSaved: analytics.totalTimeSaved || 0,
-          attemptsPrevented: analytics.totalAttempts || 0,
-          currentStreak: analytics.currentStreak || 0,
-          longestStreak: analytics.longestStreak || 0,
-          todayAttempts: analytics.todayAttempts || 0,
-          totalBlocks: analytics.totalBlocks || 0,
+          todayScreenMinutes: native.todayScreenMinutes ?? 0,
+          timeSavedMinutes: native.timeSavedMinutes ?? 0,
+          attemptsToday: native.attemptsToday ?? 0,
+          grantedMinutesToday: native.grantedMinutesToday ?? 0,
+          blockedAppUsageMinutes: native.blockedAppUsageMinutes ?? 0,
+          hasUsagePermission: native.hasUsagePermission ?? false,
         });
-      }
-      
-      // Load recent activity
-      const activity = await loadData(STORAGE_KEYS.RECENT_ACTIVITY);
-      if (activity && Array.isArray(activity)) {
-        setRecentActivity(activity.slice(0, 5)); // Show last 5 activities
       }
     } catch (error) {
       console.error('Error loading stats:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadRealData();
+    const interval = setInterval(loadRealData, 10000);
+    return () => clearInterval(interval);
+  }, [loadRealData]);
 
   if (loading) {
     return (
@@ -62,74 +72,75 @@ export default function OverviewScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor={colors.background} />
-      <ScrollView 
-        style={styles.container} 
+      <ScrollView
+        style={styles.container}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>IntentionalSpace</Text>
-          <Text style={styles.headerSubtitle}>Your digital wellness journey</Text>
+          <Text style={styles.headerTitle}>Today</Text>
+          <Text style={styles.headerSubtitle}>Your digital wellness at a glance</Text>
         </View>
 
-        {/* Main Stats Card */}
         <View style={styles.mainCard}>
-          <Text style={styles.mainCardLabel}>Time Saved Today</Text>
-          <Text style={styles.mainCardValue}>{stats.timeSaved} min</Text>
-          <View style={styles.mainCardDivider} />
-          <Text style={styles.mainCardSubtext}>
-            {stats.timeSaved > 0 ? `That's ${Math.floor(stats.timeSaved / 5)} mindful moments` : 'Start by blocking apps'}
+          <Text style={styles.mainCardLabel}>Phone active time today</Text>
+          <Text style={styles.mainCardValue}>
+            {formatMinutes(stats.todayScreenMinutes)}
           </Text>
-        </View>
-
-        {/* Stats Grid */}
-        <View style={styles.statsGrid}>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.attemptsPrevented}</Text>
-            <Text style={styles.statLabel}>Attempts Prevented</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.currentStreak}</Text>
-            <Text style={styles.statLabel}>Current Streak</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.longestStreak}</Text>
-            <Text style={styles.statLabel}>Best Streak</Text>
-          </View>
-        </View>
-
-        {/* Today's Activity */}
-        <View style={styles.recentSection}>
-          <Text style={styles.sectionTitle}>Today's Activity</Text>
-          {stats.todayAttempts === 0 ? (
-            <View style={styles.emptyState}>
-              <Text style={styles.emptyStateText}>No attempts yet today</Text>
-              <Text style={styles.emptyStateSubtext}>Stay mindful! 🌱</Text>
-            </View>
-          ) : (
-            <View style={styles.activityItem}>
-              <View style={styles.activityDot} />
-              <Text style={styles.activityText}>
-                {stats.todayAttempts} intervention{stats.todayAttempts !== 1 ? 's' : ''} triggered
-              </Text>
-            </View>
+          {!stats.hasUsagePermission && (
+            <Text style={styles.permissionHint}>
+              Enable Usage Access in Block → Permissions for accurate screen time
+            </Text>
           )}
         </View>
 
-        {/* Recent Activity */}
-        {recentActivity.length > 0 && (
-          <View style={styles.recentSection}>
-            <Text style={styles.sectionTitle}>Recent Activity</Text>
-            {recentActivity.map((activity, index) => (
-              <View key={index} style={styles.activityItem}>
-                <View style={styles.activityDot} />
-                <Text style={styles.activityText}>{activity.message}</Text>
-                <Text style={styles.activityTime}>{activity.time}</Text>
-              </View>
-            ))}
+        <View style={styles.mainCard}>
+          <Text style={styles.mainCardLabel}>Time saved today</Text>
+          <Text style={[styles.mainCardValue, styles.savedValue]}>
+            {formatMinutes(stats.timeSavedMinutes)}
+          </Text>
+          <Text style={styles.mainCardSubtext}>
+            Granted {formatMinutes(stats.grantedMinutesToday)} − used{' '}
+            {formatMinutes(stats.blockedAppUsageMinutes)} on blocked apps
+          </Text>
+        </View>
+
+        <View style={styles.statsGrid}>
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>{stats.attemptsToday}</Text>
+            <Text style={styles.statLabel}>Blocked app opens</Text>
+            <Text style={styles.statHint}>Times you tried to open a blocked app</Text>
           </View>
-        )}
-        
+          <View style={styles.statCard}>
+            <Text style={styles.statValue}>
+              {formatMinutes(stats.blockedAppUsageMinutes)}
+            </Text>
+            <Text style={styles.statLabel}>Time in blocked apps</Text>
+            <Text style={styles.statHint}>Actual usage today</Text>
+          </View>
+        </View>
+
+        <View style={styles.statsGrid}>
+          <View style={[styles.statCard, styles.statCardWide]}>
+            <Text style={styles.statValue}>
+              {formatMinutes(stats.grantedMinutesToday)}
+            </Text>
+            <Text style={styles.statLabel}>Total time you allowed</Text>
+            <Text style={styles.statHint}>
+              Sum of minutes chosen on intervention screens
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.infoBox}>
+          <Text style={styles.infoTitle}>How time saved works</Text>
+          <Text style={styles.infoText}>
+            Each time you pick a session length (e.g. 5 min), that counts toward
+            allowed time. Time saved = allowed − what you actually used in blocked
+            apps today.
+          </Text>
+        </View>
+
         <View style={styles.bottomPadding} />
       </ScrollView>
     </SafeAreaView>
@@ -176,7 +187,7 @@ const styles = StyleSheet.create({
   mainCard: {
     backgroundColor: colors.backgroundCard,
     marginHorizontal: 20,
-    marginVertical: 10,
+    marginVertical: 8,
     padding: 24,
     borderRadius: 24,
     borderWidth: 1,
@@ -189,24 +200,28 @@ const styles = StyleSheet.create({
   },
   mainCardValue: {
     color: colors.primary,
-    fontSize: 48,
+    fontSize: 40,
     fontWeight: '700',
-    marginBottom: 16,
+    marginBottom: 8,
   },
-  mainCardDivider: {
-    height: 1,
-    backgroundColor: colors.border,
-    marginBottom: 16,
+  savedValue: {
+    color: '#2ecc71',
   },
   mainCardSubtext: {
     color: colors.textTertiary,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  permissionHint: {
+    color: colors.textTertiary,
     fontSize: 12,
+    marginTop: 8,
+    fontStyle: 'italic',
   },
   statsGrid: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    marginVertical: 10,
+    paddingHorizontal: 15,
+    marginVertical: 6,
   },
   statCard: {
     flex: 1,
@@ -214,69 +229,48 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 16,
     marginHorizontal: 5,
-    alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  statCardWide: {
+    flex: 1,
   },
   statValue: {
     color: colors.textPrimary,
     fontSize: 24,
     fontWeight: '700',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   statLabel: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    textAlign: 'center',
-  },
-  recentSection: {
-    marginTop: 20,
-    paddingHorizontal: 20,
-  },
-  sectionTitle: {
     color: colors.textPrimary,
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: '600',
-    marginBottom: 16,
+    marginBottom: 4,
   },
-  activityItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.backgroundCard,
+  statHint: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  infoBox: {
+    backgroundColor: '#1a0a2e',
+    marginHorizontal: 20,
+    marginTop: 16,
     padding: 16,
     borderRadius: 12,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderLeftWidth: 4,
+    borderLeftColor: colors.primary,
   },
-  activityDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: colors.primary,
-    marginRight: 12,
-  },
-  activityText: {
-    flex: 1,
-    color: colors.textPrimary,
+  infoTitle: {
+    color: colors.primary,
     fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
   },
-  activityTime: {
-    color: colors.textTertiary,
-    fontSize: 12,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 32,
-  },
-  emptyStateText: {
+  infoText: {
     color: colors.textSecondary,
-    fontSize: 16,
-    marginBottom: 8,
-  },
-  emptyStateSubtext: {
-    color: colors.textTertiary,
-    fontSize: 14,
+    fontSize: 13,
+    lineHeight: 20,
   },
   bottomPadding: {
     height: 80,

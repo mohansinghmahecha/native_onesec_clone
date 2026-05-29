@@ -76,4 +76,14 @@
 
     </LinearLayout>
 
+    <Button
+        android:id="@+id/exit_app_button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="28dp"
+        android:text="Exit app — I don't want to use it"
+        android:textColor="#FFFFFF"
+        android:background="#333333"
+        android:paddingVertical="14dp" />
+
 </LinearLayout>

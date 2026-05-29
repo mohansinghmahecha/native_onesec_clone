@@ -26,11 +26,22 @@ class OverlayService : Service() {
     private var overlayView: View? = null
     private val handler = Handler(Looper.getMainLooper())
     private var timerRunnable: Runnable? = null
+    private var autoExitRunnable: Runnable? = null
     
     companion object {
         private const val TAG = "IntentionalSpace"
         private const val CHANNEL_ID = "intentional_space_overlay"
         private const val NOTIFICATION_ID = 999
+        private const val AUTO_EXIT_MS = 10_000L
+
+        @JvmField
+        var isOverlayVisible: Boolean = false
+
+        fun buildTimeOptions(sessionMinutes: Int): List<Int> {
+            val primary = sessionMinutes.coerceIn(1, 480)
+            val extras = listOf(1, 5, 10, 15, 30).filter { it != primary }
+            return listOf(primary, extras[0], extras[1])
+        }
     }
     
     override fun onCreate() {
@@ -44,15 +55,35 @@ class OverlayService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val packageName = intent?.getStringExtra("package_name") ?: ""
         val appName = intent?.getStringExtra("app_name") ?: "App"
+
+        if (
+            packageName.isNotBlank() &&
+            UnlockStateStore.isUnlocked(this, packageName) &&
+            !BlockedAppsHelper.isDailyLimitExceeded(this, packageName)
+        ) {
+            AccessibilityService.clearInterventionInFlight()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        if (isOverlayVisible) {
+            AccessibilityService.clearInterventionInFlight()
+            return START_NOT_STICKY
+        }
         
-        Log.d(TAG, "🔄 Showing intervention for: $appName")
         showInterventionUI(packageName, appName)
         
         return START_NOT_STICKY
     }
     
     private fun showInterventionUI(packageName: String, appName: String) {
+        if (isOverlayVisible) {
+            AccessibilityService.clearInterventionInFlight()
+            return
+        }
+
         try {
+            removeOverlay(keepServiceAlive = true)
             val inflater = getSystemService(LAYOUT_INFLATER_SERVICE) as LayoutInflater
             overlayView = inflater.inflate(R.layout.overlay_intervention, null)
             
@@ -63,8 +94,8 @@ class OverlayService : Service() {
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 else
                     WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             )
             
@@ -77,9 +108,17 @@ class OverlayService : Service() {
             val oneMinButton = overlayView?.findViewById<Button>(R.id.one_min_button)
             val fiveMinButton = overlayView?.findViewById<Button>(R.id.five_min_button)
             val tenMinButton = overlayView?.findViewById<Button>(R.id.ten_min_button)
+            val exitAppButton = overlayView?.findViewById<Button>(R.id.exit_app_button)
+
+            val sessionMinutes = BlockedAppsHelper.getSessionMinutes(this, packageName)
+            val options = Companion.buildTimeOptions(sessionMinutes)
+            oneMinButton?.text = "${options[0]} min"
+            fiveMinButton?.text = "${options[1]} min"
+            tenMinButton?.text = "${options[2]} min"
             
             // Set app name
             appNameText?.text = appName
+            breathInstruction?.text = "Pause — choose how long you need on $appName"
             
             // Breathing countdown
             var countdown = 5
@@ -107,23 +146,19 @@ class OverlayService : Service() {
             }
             handler.post(timerRunnable!!)
             
-            // Button click handlers
-            oneMinButton?.setOnClickListener {
-                unlockApp(packageName, appName, 1)
-                removeOverlay()
+            val onTimeChosen = { minutes: Int ->
+                completeUnlock(packageName, appName, minutes)
+            }
+
+            oneMinButton?.setOnClickListener { onTimeChosen(options[0]) }
+            fiveMinButton?.setOnClickListener { onTimeChosen(options[1]) }
+            tenMinButton?.setOnClickListener { onTimeChosen(options[2]) }
+
+            exitAppButton?.setOnClickListener {
+                declineAndExit(packageName, appName)
             }
             
-            fiveMinButton?.setOnClickListener {
-                unlockApp(packageName, appName, 5)
-                removeOverlay()
-            }
-            
-            tenMinButton?.setOnClickListener {
-                unlockApp(packageName, appName, 10)
-                removeOverlay()
-            }
-            
-            // Initially disable buttons
+            // Initially disable time buttons (exit is always available)
             oneMinButton?.isEnabled = false
             fiveMinButton?.isEnabled = false
             tenMinButton?.isEnabled = false
@@ -132,56 +167,102 @@ class OverlayService : Service() {
             tenMinButton?.alpha = 0.5f
             
             windowManager.addView(overlayView, params)
+            isOverlayVisible = true
+            AccessibilityService.clearInterventionInFlight()
+            MainActivity.pendingShowIntervention = false
+            scheduleAutoExit(packageName, appName)
             
         } catch (e: Exception) {
             Log.e(TAG, "Error showing overlay: ${e.message}")
+            AccessibilityService.clearInterventionInFlight()
             stopSelf()
         }
     }
     
-    private fun unlockApp(packageName: String, appName: String, minutes: Int) {
+    private fun completeUnlock(packageName: String, appName: String, minutes: Int) {
         Log.d(TAG, "🔓 Unlocking $appName for $minutes minutes")
-        
-        // Send broadcast to React Native
+
+        cancelAutoExit()
+        UnlockStateStore.grantUnlock(applicationContext, packageName, minutes)
+        AccessibilityService.markUnlockCooldown(packageName)
+
+        isOverlayVisible = false
+        removeOverlay()
+        // User is already in the app — overlay was on top; no relaunch needed.
+
         val intent = Intent("APP_UNLOCKED")
         intent.putExtra("packageName", packageName)
         intent.putExtra("appName", appName)
         intent.putExtra("minutes", minutes)
         sendBroadcast(intent)
-        
-        // Show notification
+
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 "unlock_channel",
                 "App Unlock",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_DEFAULT,
             )
             notificationManager.createNotificationChannel(channel)
         }
-        
+
         val notification = NotificationCompat.Builder(this, "unlock_channel")
             .setContentTitle("App Unlocked")
             .setContentText("$appName is unlocked for $minutes minutes")
             .setSmallIcon(android.R.drawable.ic_menu_edit)
             .setAutoCancel(true)
             .build()
-        
+
         notificationManager.notify(packageName.hashCode(), notification)
     }
+
+    private fun declineAndExit(packageName: String, appName: String) {
+        if (!isOverlayVisible && overlayView == null) return
+
+        cancelAutoExit()
+        timerRunnable?.let { handler.removeCallbacks(it) }
+        timerRunnable = null
+        isOverlayVisible = false
+        removeOverlay()
+
+        AccessibilityService.markExitCooldown(packageName)
+        AccessibilityService.clearInterventionInFlight()
+        TargetAppLauncher.exitApp(applicationContext, packageName)
+    }
+
+    private fun scheduleAutoExit(packageName: String, appName: String) {
+        cancelAutoExit()
+        autoExitRunnable = Runnable {
+            if (!isOverlayVisible) return@Runnable
+            Log.d(TAG, "⏱️ No time selected in ${AUTO_EXIT_MS / 1000}s — auto exit $appName")
+            declineAndExit(packageName, appName)
+        }
+        handler.postDelayed(autoExitRunnable!!, AUTO_EXIT_MS)
+    }
+
+    private fun cancelAutoExit() {
+        autoExitRunnable?.let { handler.removeCallbacks(it) }
+        autoExitRunnable = null
+    }
     
-    private fun removeOverlay() {
+    private fun removeOverlay(keepServiceAlive: Boolean = false) {
         try {
+            cancelAutoExit()
             timerRunnable?.let { handler.removeCallbacks(it) }
+            timerRunnable = null
             overlayView?.let {
                 windowManager.removeView(it)
                 overlayView = null
             }
+            isOverlayVisible = false
         } catch (e: Exception) {
             Log.e(TAG, "Error removing overlay: ${e.message}")
+            isOverlayVisible = false
         }
-        stopSelf()
+        if (!keepServiceAlive) {
+            stopSelf()
+        }
     }
     
     private fun createNotificationChannel() {
@@ -213,6 +294,6 @@ class OverlayService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         removeOverlay()
-        Log.d(TAG, "🛑 Overlay Service Destroyed")
+        AccessibilityService.clearInterventionInFlight()
     }
 }

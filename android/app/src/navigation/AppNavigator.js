@@ -1,6 +1,5 @@
 // D:\CEO\IntentionalSpace\src\navigation\AppNavigator.js
 import * as React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { View, Text, StyleSheet, Platform, StatusBar } from 'react-native';
 import { colors } from '../constants/colors';
@@ -23,7 +22,6 @@ const TabIcon = ({ focused, label, icon }) => (
 export default function AppNavigator() {
   return (
     <View style={styles.safeArea}>
-      <NavigationContainer>
         <Tab.Navigator
           screenOptions={({ route }) => ({
             headerShown: false,
@@ -49,7 +47,6 @@ export default function AppNavigator() {
           <Tab.Screen name="Block" component={BlockScreen} />
           <Tab.Screen name="Customize" component={CustomizeScreen} />
         </Tab.Navigator>
-      </NavigationContainer>
     </View>
   );
 }

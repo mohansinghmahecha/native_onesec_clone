@@ -1,7 +1,6 @@
 // D:\CEO\IntentionalSpace\android\app\src\services\accessibility\AppUnlockReceiver.js
 import { DeviceEventEmitter } from 'react-native';
 import TimerService from '../timer/TimerService';
-import { showSuccess } from '../../utils/toast';
 
 class AppUnlockReceiver {
   constructor() {
@@ -22,9 +21,8 @@ class AppUnlockReceiver {
     const { packageName, appName, minutes } = event;
     
     if (packageName && minutes) {
-      // Directly call TimerService to unlock the app
-      TimerService.unlockApp(packageName, appName, minutes);
-      showSuccess('App Unlocked', `${appName} unlocked for ${minutes} minutes`);
+      // Native overlay already granted unlock + scheduled re-block
+      TimerService.syncFromNativeUnlock(packageName, appName, minutes);
     }
   }
 }
