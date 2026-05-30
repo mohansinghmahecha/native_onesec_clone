@@ -1,0 +1,7 @@
+{
+  "entry": [
+    "App.js"
+  ],
+  "project": ["**/*.{js,jsx,ts,tsx}"],
+  "ignore": ["android/**"]
+}

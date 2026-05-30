@@ -51,6 +51,7 @@ object UnlockStateStore {
     fun clearUnlock(context: Context, packageName: String) {
         if (packageName.isBlank()) return
         UnlockExpiryScheduler.cancel(packageName)
+        UnlockExpiryScheduler.cancelAlarm(context, packageName)
         memoryExpiryMs.remove(packageName)
         prefs(context).edit().remove(key(packageName)).commit()
     }

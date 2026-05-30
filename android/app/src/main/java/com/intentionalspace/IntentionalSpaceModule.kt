@@ -98,6 +98,16 @@ class IntentionalSpaceModule(reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
+    fun notifyUnlockExpired(packageName: String, promise: Promise) {
+        try {
+            UnlockExpiryScheduler.onUnlockExpired(reactApplicationContext, packageName)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("EXPIRY_ERROR", e.message)
+        }
+    }
+
+    @ReactMethod
     fun grantUnlock(packageName: String, minutes: Int, promise: Promise) {
         try {
             UnlockStateStore.grantUnlock(reactApplicationContext, packageName, minutes)

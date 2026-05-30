@@ -53,7 +53,7 @@ function App() {
     try {
       if (PendingAppModule?.getPendingApp) {
         const pending = await PendingAppModule.getPendingApp();
-        if (pending?.packageName && pending?.showIntervention !== false) {
+        if (pending?.packageName && pending?.showIntervention === true) {
           openIntervention(pending.packageName, pending.appName);
         }
       }

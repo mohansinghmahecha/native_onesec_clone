@@ -5,6 +5,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
+import java.util.concurrent.ConcurrentHashMap
 
 class AccessibilityService : AccessibilityService() {
 
@@ -17,19 +18,17 @@ class AccessibilityService : AccessibilityService() {
 
         private var lastInterventionPackage: String? = null
         private var lastInterventionAt: Long = 0L
-        private const val INTERVENTION_DEBOUNCE_MS = 4_000L
+        private const val INTERVENTION_DEBOUNCE_MS = 800L
 
-        /** Throttle expensive checks — WINDOW_STATE_CHANGED only, but still debounced. */
-        private var lastProbePackage: String? = null
-        private var lastProbeAt: Long = 0L
-        private const val PROBE_INTERVAL_MS = 1_000L
-
-        private const val POST_UNLOCK_GRACE_MS = 5_000L
+        private const val POST_UNLOCK_GRACE_MS = 3_000L
         private val unlockCooldownUntilMs = mutableMapOf<String, Long>()
 
-        /** After exit/auto-exit, ignore brief window events during HOME transition. */
-        private const val POST_EXIT_GRACE_MS = 3_000L
+        /** Brief pause after user taps Exit (blocks ghost overlays on HOME). */
+        private const val POST_EXIT_MS = 2_500L
         private val exitCooldownUntilMs = mutableMapOf<String, Long>()
+
+        /** Session ended while user was away — show block modal on next app open. */
+        private val pendingReblockPackages = ConcurrentHashMap.newKeySet<String>()
 
         @Volatile
         var interventionInFlight: Boolean = false
@@ -45,12 +44,19 @@ class AccessibilityService : AccessibilityService() {
 
         fun markExitCooldown(packageName: String) {
             exitCooldownUntilMs[packageName] =
-                System.currentTimeMillis() + POST_EXIT_GRACE_MS
+                System.currentTimeMillis() + POST_EXIT_MS
         }
 
         fun clearExitCooldown(packageName: String) {
             exitCooldownUntilMs.remove(packageName)
         }
+
+        fun markPendingReblock(packageName: String) {
+            if (packageName.isNotBlank()) pendingReblockPackages.add(packageName)
+        }
+
+        fun consumePendingReblock(packageName: String): Boolean =
+            pendingReblockPackages.remove(packageName)
 
         fun resetInterventionDebounce(packageName: String) {
             if (lastInterventionPackage == packageName) {
@@ -61,6 +67,12 @@ class AccessibilityService : AccessibilityService() {
 
         fun clearInterventionInFlight() {
             interventionInFlight = false
+        }
+
+        fun getServiceInstance(): AccessibilityService? = instance
+
+        fun requestReblock(context: Context, packageName: String, appName: String) {
+            InterventionLauncher.showOverlay(context, packageName, appName, isReblock = true)
         }
 
         private fun isInExitCooldown(packageName: String): Boolean {
@@ -77,11 +89,6 @@ class AccessibilityService : AccessibilityService() {
             return false
         }
 
-        fun getServiceInstance(): AccessibilityService? = instance
-
-        fun requestReblock(context: Context, packageName: String, appName: String) {
-            InterventionLauncher.showReblockOverlay(context, packageName, appName)
-        }
     }
 
     override fun onServiceConnected() {
@@ -91,42 +98,62 @@ class AccessibilityService : AccessibilityService() {
         Log.d(TAG, "Accessibility service connected")
 
         val info = AccessibilityServiceInfo().apply {
-            // CONTENT_CHANGED caused hundreds of events/sec in YouTube → hang/black loop
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            notificationTimeout = 300
+            notificationTimeout = 100
         }
         setServiceInfo(info)
+        UnlockExpiryScheduler.restoreSchedules(this)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val packageName = event.packageName?.toString() ?: return
-        maybeIntervene(packageName)
+
+        handleForegroundChange(packageName)
+
+        if (TriggerAppsHelper.resolvePackage(packageName) != null) {
+            maybeIntervene(packageName)
+        }
+    }
+
+    /**
+     * Accessibility told us the active window changed — hide overlay if user left the blocked app.
+     */
+    private fun handleForegroundChange(foregroundPackage: String) {
+        if (!OverlayService.isOverlayVisible) return
+
+        val overlayTarget = OverlayService.currentOverlayPackage ?: return
+
+        if (foregroundPackage == overlayTarget) return
+        if (foregroundPackage == applicationContext.packageName) return
+
+        Log.d(TAG, "Dismiss overlay: left $overlayTarget, now on $foregroundPackage")
+        InterventionLauncher.cancelAllPendingOverlays()
+        OverlayService.dismissStaleOverlay(this)
     }
 
     private fun maybeIntervene(packageName: String) {
-        if (TriggerAppsHelper.resolvePackage(packageName) == null) return
-
         val now = System.currentTimeMillis()
-        if (packageName == lastProbePackage && now - lastProbeAt < PROBE_INTERVAL_MS) {
-            return
-        }
-        lastProbePackage = packageName
-        lastProbeAt = now
 
         if (UnlockStateStore.isUnlocked(this, packageName)) return
-        if (isInUnlockCooldown(packageName)) return
-        if (isInExitCooldown(packageName)) return
-        if (interventionInFlight || OverlayService.isOverlayVisible) return
 
-        if (
-            packageName == lastInterventionPackage &&
-            now - lastInterventionAt < INTERVENTION_DEBOUNCE_MS
-        ) {
-            return
+        val needsReblock = consumePendingReblock(packageName)
+        if (!needsReblock) {
+            if (isInUnlockCooldown(packageName)) return
+            if (isInExitCooldown(packageName)) return
+            if (
+                packageName == lastInterventionPackage &&
+                now - lastInterventionAt < INTERVENTION_DEBOUNCE_MS
+            ) {
+                return
+            }
+        } else {
+            clearExitCooldown(packageName)
+            resetInterventionDebounce(packageName)
         }
 
+        if (interventionInFlight || OverlayService.isOverlayVisible) return
         if (!BlockedAppsHelper.shouldIntervene(this, packageName)) return
 
         val appName = TriggerAppsHelper.getAppName(packageName)
@@ -134,7 +161,7 @@ class AccessibilityService : AccessibilityService() {
         lastInterventionPackage = packageName
         lastInterventionAt = now
         interventionInFlight = true
-        InterventionLauncher.launch(this, packageName, appName)
+        InterventionLauncher.showOverlay(this, packageName, appName, isReblock = needsReblock)
     }
 
     override fun onInterrupt() {

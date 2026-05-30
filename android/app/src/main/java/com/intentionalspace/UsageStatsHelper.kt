@@ -1,6 +1,7 @@
 package com.intentionalspace
 
 import android.app.AppOpsManager
+import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
@@ -107,20 +108,85 @@ object UsageStatsHelper {
         packageName: String,
         withinMs: Long = 60_000L,
     ): Boolean {
-        if (!hasUsagePermission(context)) return true
+        if (!hasUsagePermission(context)) return false
+        return isPackageInForeground(context, packageName, withinMs)
+    }
+
+    /**
+     * Best-effort foreground package (MOVE_TO_FOREGROUND / RESUMED events, then lastTimeUsed).
+     */
+    fun getForegroundPackage(context: Context, withinMs: Long = 5_000L): String? {
+        if (!hasUsagePermission(context)) return null
+
+        val now = System.currentTimeMillis()
+        val begin = now - withinMs.coerceAtLeast(1_000L)
+
+        try {
+            val usageStatsManager =
+                context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+            val events = usageStatsManager.queryEvents(begin, now)
+            val event = UsageEvents.Event()
+            var lastForeground: String? = null
+            var lastAt = 0L
+
+            while (events.hasNextEvent()) {
+                events.getNextEvent(event)
+                val type = event.eventType
+                if (
+                    type == UsageEvents.Event.ACTIVITY_RESUMED ||
+                    type == UsageEvents.Event.MOVE_TO_FOREGROUND
+                ) {
+                    val pkg = event.packageName
+                    if (!pkg.isNullOrBlank() && !isExcludedPackage(pkg)) {
+                        if (event.timeStamp >= lastAt) {
+                            lastAt = event.timeStamp
+                            lastForeground = pkg
+                        }
+                    }
+                }
+            }
+
+            if (lastForeground != null) return lastForeground
+        } catch (_: Exception) {
+            // fall through to lastTimeUsed
+        }
 
         return try {
-            val stats = queryTodayStats(context) ?: return true
-            val now = System.currentTimeMillis()
-            val recent = stats
+            val stats = queryTodayStats(context) ?: return null
+            stats
                 .filter { !isExcludedPackage(it.packageName) && it.lastTimeUsed > 0 }
                 .maxByOrNull { it.lastTimeUsed }
-            recent != null &&
-                recent.packageName == packageName &&
-                now - recent.lastTimeUsed < withinMs
+                ?.takeIf { now - it.lastTimeUsed < withinMs }
+                ?.packageName
         } catch (_: Exception) {
-            true
+            null
         }
+    }
+
+    /** True when [packageName] is the app the user is actually viewing right now. */
+    fun isPackageInForeground(
+        context: Context,
+        packageName: String,
+        withinMs: Long = 5_000L,
+    ): Boolean {
+        if (packageName.isBlank()) return false
+        if (!hasUsagePermission(context)) return false
+        val foreground = getForegroundPackage(context, withinMs) ?: return false
+        return foreground == packageName
+    }
+
+    /**
+     * Whether an overlay may be shown for [packageName].
+     * Without usage access we trust the accessibility window event that triggered intervention.
+     */
+    fun canShowOverlayForPackage(
+        context: Context,
+        packageName: String,
+        withinMs: Long = 5_000L,
+    ): Boolean {
+        if (packageName.isBlank()) return false
+        if (!hasUsagePermission(context)) return true
+        return isPackageInForeground(context, packageName, withinMs)
     }
 
     private fun queryTodayStats(context: Context): List<android.app.usage.UsageStats>? {

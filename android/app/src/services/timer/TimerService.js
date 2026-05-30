@@ -2,7 +2,7 @@
 import { showSuccess, showInfo, showError } from '../../utils/toast';
 import { saveData, loadData, STORAGE_KEYS } from '../../utils/storage';
 import NotificationService from '../notifications/NotificationService';
-import { clearNativeUnlock } from '../../utils/nativeSync';
+import { clearNativeUnlock, notifyNativeUnlockExpired } from '../../utils/nativeSync';
 
 class TimerService {
   constructor() {
@@ -61,7 +61,9 @@ class TimerService {
     this.unlockedApps = this.unlockedApps.filter(app => {
       if (app.expiresAt <= now) {
         console.log(`🔒 App locked: ${app.packageName}`);
-        clearNativeUnlock(app.packageName).catch(() => {});
+        clearNativeUnlock(app.packageName)
+          .then(() => notifyNativeUnlockExpired(app.packageName))
+          .catch(() => {});
         NotificationService.showAppLockedNotification(app.appName);
         hasChanges = true;
         return false;

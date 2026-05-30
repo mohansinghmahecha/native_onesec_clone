@@ -65,6 +65,14 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <receiver
+            android:name=".UnlockExpiryReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.intentionalspace.UNLOCK_EXPIRED" />
+            </intent-filter>
+        </receiver>
+
     </application>
 
 </manifest>

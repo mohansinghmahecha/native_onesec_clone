@@ -85,6 +85,15 @@ export async function clearNativeUnlock(packageName) {
   return true;
 }
 
+/** Session timer ended — lock app and show block modal when user is in / opens the app. */
+export async function notifyNativeUnlockExpired(packageName) {
+  if (Platform.OS !== 'android' || !IntentionalSpaceModule?.notifyUnlockExpired) {
+    return false;
+  }
+  await IntentionalSpaceModule.notifyUnlockExpired(packageName);
+  return true;
+}
+
 export async function clearPendingInterventionNative() {
   if (Platform.OS !== 'android' || !PendingAppModule?.clearPendingIntervention) {
     return false;

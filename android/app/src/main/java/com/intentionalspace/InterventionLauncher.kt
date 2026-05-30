@@ -9,23 +9,22 @@ import android.util.Log
 
 object InterventionLauncher {
     private const val TAG = "IntentionalSpace"
-    private const val OVERLAY_DELAY_MS = 200L
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingRunnables = mutableMapOf<String, Runnable>()
 
-    fun launch(context: Context, packageName: String, appName: String) {
-        AccessibilityService.clearExitCooldown(packageName)
-        showInAppOverlay(context, packageName, appName, recordAttempt = true)
+    fun cancelPendingOverlay(packageName: String) {
+        pendingRunnables.remove(packageName)?.let { mainHandler.removeCallbacks(it) }
     }
 
-    fun showReblockOverlay(context: Context, packageName: String, appName: String) {
-        showInAppOverlay(context, packageName, appName, recordAttempt = false)
+    fun cancelAllPendingOverlays() {
+        pendingRunnables.keys.toList().forEach { cancelPendingOverlay(it) }
     }
 
-    private fun showInAppOverlay(
+    fun showOverlay(
         context: Context,
         packageName: String,
         appName: String,
-        recordAttempt: Boolean,
+        isReblock: Boolean = false,
     ) {
         if (UnlockStateStore.isUnlocked(context, packageName)) {
             AccessibilityService.clearInterventionInFlight()
@@ -37,20 +36,44 @@ object InterventionLauncher {
             return
         }
 
-        if (recordAttempt) {
+        if (!isReblock) {
             DailyStatsStore.recordAttempt(context.applicationContext)
+            AccessibilityService.clearExitCooldown(packageName)
         }
 
-        MainActivity.pendingAppPackage = packageName
-        MainActivity.pendingAppName = appName
+        MainActivity.pendingAppPackage = null
+        MainActivity.pendingAppName = null
         MainActivity.pendingShowIntervention = false
 
         val appContext = context.applicationContext
-        mainHandler.postDelayed({
+        cancelPendingOverlay(packageName)
+
+        val runnable = Runnable {
+            pendingRunnables.remove(packageName)
             try {
+                if (UnlockStateStore.isUnlocked(appContext, packageName)) {
+                    AccessibilityService.clearInterventionInFlight()
+                    return@Runnable
+                }
                 if (OverlayService.isOverlayVisible) {
                     AccessibilityService.clearInterventionInFlight()
-                    return@postDelayed
+                    return@Runnable
+                }
+
+                val activeWindow = try {
+                    AccessibilityService.getServiceInstance()
+                        ?.rootInActiveWindow?.packageName?.toString()
+                } catch (_: Exception) {
+                    null
+                }
+                if (
+                    activeWindow != null &&
+                    activeWindow != packageName &&
+                    activeWindow != appContext.packageName
+                ) {
+                    Log.d(TAG, "Skip overlay — active window is $activeWindow not $packageName")
+                    AccessibilityService.clearInterventionInFlight()
+                    return@Runnable
                 }
 
                 if (OverlayPermissionHelper.canDrawOverlays(appContext)) {
@@ -68,7 +91,10 @@ object InterventionLauncher {
                 Log.e(TAG, "Overlay launch failed: ${e.message}")
                 AccessibilityService.clearInterventionInFlight()
             }
-        }, OVERLAY_DELAY_MS)
+        }
+
+        pendingRunnables[packageName] = runnable
+        mainHandler.postDelayed(runnable, 150L)
     }
 
     fun isAccessibilityEnabled(context: Context): Boolean {
